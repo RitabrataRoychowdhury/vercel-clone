@@ -3,10 +3,23 @@ const path = require('path')
 const fs = require('fs')
 const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3')
 const mime = require('mime-types')
-const Redis = require('ioredis')
+//const Redis = require('ioredis')
+const {Kafka} = require('kafkajs')
+//const publisher = new Redis('rediss://default:AVNS_g7MFAx0_Z8OMM9a4FYY@redis-20e353b1-vercel-clone101.a.aivencloud.com:17201')
 
-const publisher = new Redis('rediss://default:AVNS_g7MFAx0_Z8OMM9a4FYY@redis-20e353b1-vercel-clone101.a.aivencloud.com:17201')
-
+const kafka = new Kafka({
+    clientId: `docker-build-server-${PROJECT_ID}`,
+    broker: [],
+    ssl:{
+        ca: [fs.readFileSync(path.join(__dirname, 'kafka.pem'), 'utf-8')]
+    },
+    sasl: {
+        username: 'avnadmin',
+        password: 'AVNS_inVSPqeB5kKf-E_76tr',
+        mechanism: 'plain'
+    },
+})
+const producer = kafka.producer()
 const s3Client = new S3Client({
     region: 'ap-south-1',
     credentials: {
@@ -16,12 +29,15 @@ const s3Client = new S3Client({
 })
 
 const PROJECT_ID = process.env.PROJECT_ID
-function publishLog( log ){
-    publisher.publish(`log:${PROJECT_ID}`,JSON.stringify({log}))
+const DEPLOYMENT_ID = process.env.DEPLOYMENT_ID
+async function publishLog( log ){
+    //publisher.publish(`log:${PROJECT_ID}`,JSON.stringify({log}))
+    await producer.send({ topic: `container-logs`, messages: [{ key: 'log', value: JSON.stringify({ PROJECT_ID, DEPLOYEMENT_ID, log }) }] })
 }
 async function init() {
+    await producer.connect()
     console.log('Executing script.js')
-    publishLog('Build Started...')
+    await publishLog('Build Started...')
     const outDirPath = oath.join(__dirname,'output')
     const p = exec(`cd ${outDirPath} && npm install && npm run build`)
 
@@ -29,21 +45,21 @@ async function init() {
         console.log(data.toString())
         publishing(data.toString())
     })
-    p.stdout.on('error', function (data) {
+    p.stdout.on('error', async function (data) {
         console.log('Error',data.toString())
-        publishLog(`error: ${data.toString()}`)
+        await publishLog(`error: ${data.toString()}`)
     })
     p.on('close', async function(){
         console.log('Build Complete')
-        publishLog(`Build Complete`)
+        await publishLog(`Build Complete`)
         const distFolderPath = path.join(__dirname, 'output', 'dist')
         const distFolderContents = fs.readdirSync(distFolderPath, {recursive : true})
-        publishLog(`Start Uploading...`)
+        await publishLog(`Start Uploading...`)
         for (const file of distFolderContents){
             const filePath = path.join(distFolderPath, file)
             if(fs.lstatSync(filePath).isDirectory())continue;
             console.log('uploading', filePath)
-            publishLog(`uploading ${file}`)
+           await publishLog(`uploading ${file}`)
             const command = new PutObjectCommand({
                 Bucket: '',
                 Key: `__outputs/${PROJECT_ID}/${filePath}`,
@@ -54,8 +70,9 @@ async function init() {
             publishLog(`uploaded ${file}`)
             console.log('uploaded', filePath)
         }
-        publishLog(`Done`)
+        await publishLog(`Done`)
         console.log('DONE...')
+        process.exit(0)
     })
 }
 
